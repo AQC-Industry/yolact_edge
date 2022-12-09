@@ -104,6 +104,9 @@ def main(multithread=False):
         print(f"Predictions done in {total_time:.2f} seconds.")
 
     # Post process
+    if not os.path.exists("./results/"):
+        os.mkdir("./results/")
+        
     start_time = time()
     res = post_process_output(res)
     output_path = "./results/output.json"
