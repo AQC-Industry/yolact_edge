@@ -1087,6 +1087,9 @@ yolact_resnet50_qualitex_custom_2_config = yolact_resnet50_config.copy({
 
     # Image Size
     'max_size': 512,#4096,
+
+    # Mask Settings
+    'mask_proto_debug': False,
     
     'backbone': yolact_resnet50_config.backbone.copy({
         'pred_aspect_ratios': [ [[1, 1/2, 2]] ]*6,

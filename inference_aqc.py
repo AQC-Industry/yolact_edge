@@ -117,7 +117,8 @@ def parse_args(argv=None):
                         help='This enables the safe mode that is a workaround for various TensorRT engine issues.')
 
     parser.set_defaults(no_bar=False, display=False, resume=False, output_coco_json=False, output_web_json=False, shuffle=False,
-                        benchmark=False, no_sort=False, no_hash=False, mask_proto_debug=False, crop=True, detect=False)
+                        benchmark=False, no_sort=False, no_hash=False, mask_proto_debug=False, crop=True, detect=False, 
+                        display_masks=False, display_text=False)
 
     global args
     args = parser.parse_args(argv)
@@ -134,11 +135,13 @@ class YOLACTEdgeInference(object):
 
     def __init__(self, weights, model_config, dataset, calib_images, config_ovr={}, args_ovr={}):
         print("Configuring YOLACT edge...")
-        self.color_cache = defaultdict(lambda: {})
+        # self.color_cache = defaultdict(lambda: {})
+        self.color_cache = {}
 
         global cfg
         set_cfg(model_config)
-        cfg.dataset.calib_images = calib_images
+        if calib_images != None:
+            cfg.dataset.calib_images = calib_images
         cfg.replace(cfg.copy(config_ovr))
 
 
@@ -157,26 +160,34 @@ class YOLACTEdgeInference(object):
                 cudnn.deterministic = True
                 cudnn.benchmark = False
                 torch.set_default_tensor_type('torch.cuda.FloatTensor')
+
+                print("Loading YOLACT edge model...")
+                net = Yolact(training=False)
+                net.load_weights(weights, args=args)
+                net.eval()
+                convert_to_tensorrt(net, cfg, args, transform=BaseTransform())
+                net = net.cuda()
+                self.net = net
+                print("Model ready for inference...")
             else:
-                print("CUDA missing... Exiting...")
-                exit(1)
+                print("CUDA missing... using cpu instead.")
+                print("Loading YOLACT edge model...")
+                net = Yolact(training=False)
+                net.load_weights(weights, args=args)
+                net.eval()
+                self.net = net
+                print("Model ready for inference...")
 
-            print("Loading YOLACT edge model...")
-            net = Yolact(training=False)
-            net.load_weights(weights, args=args)
-            net.eval()
-            convert_to_tensorrt(net, cfg, args, transform=BaseTransform())
-            net = net.cuda()
-            self.net = net
-            print("Model ready for inference...")
-
-    def prep_output(self, dets_out, img, h, w, undo_transform=True, class_color=False, mask_alpha=0.45):
+    def prep_output(self, dets_out, img, h, w, undo_transform=True, class_color=False, mask_alpha=0.45, score_threshold=0):
         """
         Note: If undo_transform=False then im_h and im_w are allowed to be None.
         """
         if undo_transform:
             img_numpy = undo_image_transformation(img, w, h)
-            img_gpu = torch.Tensor(img_numpy).cuda()
+            if torch.cuda.is_available():
+                img_gpu = torch.Tensor(img_numpy).cuda()
+            else:
+                img_gpu = torch.Tensor(img_numpy)
         else:
             img_gpu = img / 255.0
             h, w, _ = img.shape
@@ -184,8 +195,9 @@ class YOLACTEdgeInference(object):
         with timer.env('Postprocess'):
             t = postprocess(dets_out, w, h, visualize_lincomb=args.display_lincomb,
                             crop_masks=args.crop,
-                            score_threshold=args.score_threshold)
-            torch.cuda.synchronize()
+                            score_threshold=score_threshold)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
 
         with timer.env('Copy'):
             if cfg.eval_mask_branch:
@@ -230,8 +242,12 @@ class YOLACTEdgeInference(object):
             masks = masks[:num_dets_to_consider, :, :, None]
 
             # Prepare the RGB images for each mask given their color (size [num_dets, h, w, 1])
-            colors = torch.cat([get_color(j, on_gpu=img_gpu.device.index).view(
-                1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
+            if torch.cuda.is_available():
+                colors = torch.cat([get_color(j, on_gpu=img_gpu.device.index).view(
+                    1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
+            else:
+                print([get_color(j, on_gpu=None) for j in range(num_dets_to_consider)])
+                colors = torch.cat([get_color(j, on_gpu=None).view(1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
             masks_color = masks.repeat(1, 1, 1, 3) * colors * mask_alpha
 
             # This is 1 everywhere except for 1-mask_alpha where the mask is
@@ -286,7 +302,10 @@ class YOLACTEdgeInference(object):
         return (img_numpy, classes, scores, masks)
 
     def predict(self, img, show=False):
-        frame = torch.Tensor(img).cuda().float()
+        if torch.cuda.is_available():
+            frame = torch.Tensor(img).cuda().float()
+        else:
+            frame = torch.Tensor(img).float()
         batch = FastBaseTransform()(frame.unsqueeze(0))
 
         extras = {"backbone": "full", "interrupt": False,
@@ -311,10 +330,11 @@ class YOLACTEdgeInference(object):
 
         return {"img": img_numpy, "class": classes, "score": scores, "mask": masks.squeeze()}
     
-    def predict_simple(self, path):
-        start_time = time.time()
-        frame = torch.from_numpy(cv2.imread(path)).cuda().float()
-        #frame = torch.Tensor(img).cuda().float()
+    def predict_simple(self, path, score_threshold=0):
+        if torch.cuda.is_available():
+            frame = torch.from_numpy(cv2.imread(path)).cuda().float()
+        else:
+            frame = torch.from_numpy(cv2.imread(path)).float()
         batch = FastBaseTransform()(frame.unsqueeze(0))
 
         extras = {"backbone": "full", "interrupt": False,
@@ -322,7 +342,13 @@ class YOLACTEdgeInference(object):
 
         with torch.no_grad():
             preds = self.net(batch, extras=extras)["pred_outs"]
-            
-        stop_time = time.time()
-        total_time = stop_time-start_time
-        return preds, total_time
+
+            out = self.prep_output(
+                preds, frame, None, None, undo_transform=False, score_threshold=score_threshold)
+        if out == None:
+            print("No predictions!")
+            return path, []
+
+        img_numpy, classes, scores, masks = out
+
+        return path, classes, scores, masks.numpy()

@@ -32,6 +32,14 @@ import cv2
 import logging
 
 import math
+import multiprocessing as mp
+from tqdm import tqdm
+import signal
+import dill as pickle
+
+def init_worker():
+    ''' Add KeyboardInterrupt exception to mutliprocessing workers '''
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
 def str2bool(v):
@@ -50,7 +58,7 @@ def parse_args(argv=None):
                         help='Trained state_dict file path to open. If "interrupt", this will open the interrupt file.')
     parser.add_argument('--top_k', default=5, type=int,
                         help='Further restrict the number of predictions to parse')
-    parser.add_argument('--cuda', default=True, type=str2bool,
+    parser.add_argument('--cuda', default=False, type=str2bool,
                         help='Use cuda to evaulate model')
     parser.add_argument('--fast_nms', default=True, type=str2bool,
                         help='Whether to use a faster, but not entirely correct version of NMS.')
@@ -136,6 +144,8 @@ def parse_args(argv=None):
                         help='This replaces all TensorRT INT8 optimization with FP16 optimization when specified.')
     parser.add_argument('--use_tensorrt_safe_mode', default=False, dest='use_tensorrt_safe_mode', action='store_true',
                         help='This enables the safe mode that is a workaround for various TensorRT engine issues.')
+    parser.add_argument('--multiprocess', default=False, type=bool,
+                        help='Use multiprocess to launch evaluation on images.')
 
     parser.set_defaults(no_bar=False, display=False, resume=False, output_coco_json=False, output_web_json=False, shuffle=False,
                         benchmark=False, no_sort=False, no_hash=False, mask_proto_debug=False, crop=True, detect=False)
@@ -160,7 +170,10 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
     """
     if undo_transform:
         img_numpy = undo_image_transformation(img, w, h)
-        img_gpu = torch.Tensor(img_numpy).cuda()
+        if args.cuda:
+            img_gpu = torch.Tensor(img_numpy).cuda()
+        else:
+            img_gpu = torch.Tensor(img_numpy)
     else:
         img_gpu = img / 255.0
         h, w, _ = img.shape
@@ -169,7 +182,8 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         t = postprocess(dets_out, w, h, visualize_lincomb = args.display_lincomb,
                                         crop_masks        = args.crop,
                                         score_threshold   = args.score_threshold)
-        torch.cuda.synchronize()
+        if args.cuda:
+            torch.cuda.synchronize()
 
     with timer.env('Copy'):
         if cfg.eval_mask_branch:
@@ -213,7 +227,10 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
         masks = masks[:num_dets_to_consider, :, :, None]
         
         # Prepare the RGB images for each mask given their color (size [num_dets, h, w, 1])
-        colors = torch.cat([get_color(j, on_gpu=img_gpu.device.index).view(1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
+        if args.cuda:
+            colors = torch.cat([get_color(j, on_gpu=img_gpu.device.index).view(1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
+        else:
+            colors = torch.cat([get_color(j, on_gpu=img_gpu).view(1, 1, 1, 3) for j in range(num_dets_to_consider)], dim=0)
         masks_color = masks.repeat(1, 1, 1, 3) * colors * mask_alpha
 
         # This is 1 everywhere except for 1-mask_alpha where the mask is
@@ -588,7 +605,10 @@ def badhash(x):
 
 def evalimage(net:Yolact, path:str, save_path:str=None, detections:Detections=None, image_id=None):
     start_time = time.time()
-    frame = torch.from_numpy(cv2.imread(path)).cuda().float()
+    if torch.cuda.is_available():
+        frame = torch.from_numpy(cv2.imread(path)).cuda().float()
+    else:
+        frame = torch.from_numpy(cv2.imread(path)).float()
     batch = FastBaseTransform()(frame.unsqueeze(0))
 
     if cfg.flow.warp_mode != 'none':
@@ -606,7 +626,6 @@ def evalimage(net:Yolact, path:str, save_path:str=None, detections:Detections=No
             _, _, h, w = batch.size()
             classes, scores, boxes, masks = \
                 postprocess(preds, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
-            print(classes, scores, boxes, masks)
 
         with timer.env('JSON Output'):
             boxes = boxes.cpu().numpy()
@@ -621,7 +640,6 @@ def evalimage(net:Yolact, path:str, save_path:str=None, detections:Detections=No
         _, _, h, w = batch.size()
         classes, scores, boxes, masks = \
                 postprocess(preds, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
-        print(classes, scores, boxes, masks)
     
     if save_path is None:
         img_numpy = img_numpy[:, :, (2, 1, 0)]
@@ -633,26 +651,56 @@ def evalimage(net:Yolact, path:str, save_path:str=None, detections:Detections=No
     else:
         stop_time = time.time()
         total_time = stop_time - start_time
-        #print(f"Time to predict a frame: {total_time}")
-        return total_time
-        #cv2.imwrite(save_path, img_numpy)
+        cv2.imwrite(save_path, img_numpy)
+    
+    return total_time
 
 def evalimages(net:Yolact, input_folder:str, output_folder:str, detections:Detections=None):
-    time_list = []
+    if args.multiprocess:
+        procs = []
+        n_cpu = 1# int(mp.cpu_count() / 2)
+        proc_stop = len(list(Path(input_folder).glob('*')))
+    else:
+        time_list = []
+
     if not os.path.exists(output_folder):
         os.mkdir(output_folder)
 
     print()
-    for i, p in enumerate(Path(input_folder).glob('*')):
+    for i, p in enumerate(tqdm(list(Path(input_folder).glob('*')))):
         path = str(p)
         name = os.path.basename(path)
         name = '.'.join(name.split('.')[:-1]) + '.png'
         out_path = os.path.join(output_folder, name)
 
-        time_list.append(evalimage(net, path, out_path, detections=detections, image_id=str(i)))
-        print(path + ' -> ' + out_path)
-    print("Average time to predict: ", np.mean(time_list))
-    print("Average FPS on prediction: ", 1/np.mean(time_list))
+        # if args.multiprocess:
+        #     pool = mp.Pool(n_cpu, init_worker)
+        #     pool.map(evalimage, (net, path, out_path, detections, str(i)))
+
+        if args.multiprocess:
+            proc = mp.Process(
+                target=evalimage, args=(net, path, out_path, detections, str(i))
+                )
+            procs.append(proc)
+            proc.start()
+
+            # Check in order to not use all of our computing power and crash the PC
+            if i % n_cpu == 0 and i > 0:
+                for proc in procs:
+                    proc.join()
+                procs = []
+                if i == proc_stop - 1:
+                    break
+            elif i == proc_stop - 1:
+                for proc in procs:
+                    proc.join()
+                break
+
+        else:
+            time_list.append(evalimage(net, path, out_path, detections=detections, image_id=str(i)))
+            # print(path + ' -> ' + out_path)
+    # print("Average time to predict: ", np.mean(time_list))
+    # print("Average FPS on prediction: ", 1/np.mean(time_list))
     print('Done.')
 
 from multiprocessing.pool import ThreadPool
@@ -1219,6 +1267,7 @@ def print_maps(all_maps):
 
 
 if __name__ == '__main__':
+    mp.set_start_method('fork')
     parse_args()
 
     if args.config is not None:

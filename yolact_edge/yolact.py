@@ -6,7 +6,7 @@ import numpy as np
 from functools import partial
 from itertools import product, chain
 from math import sqrt
-from typing import List, Tuple, Optional
+from typing import Any, List, Tuple, Optional
 from torch import Tensor
 
 from yolact_edge.data.config import cfg, mask_type
@@ -33,14 +33,20 @@ except:
 
 # This is required for Pytorch 1.0.1 on Windows to initialize Cuda on some driver versions.
 # See the bug report here: https://github.com/pytorch/pytorch/issues/17108
-torch.cuda.current_device()
+if torch.cuda.is_available():
+    torch.cuda.current_device()
 
-# As of March 10, 2019, Pytorch DataParallel still doesn't support JIT Script Modules
-use_jit = False if use_torch2trt else torch.cuda.device_count() <= 1
+    # As of March 10, 2019, Pytorch DataParallel still doesn't support JIT Script Modules
+    use_jit = False if use_torch2trt else torch.cuda.device_count() <= 1
 
-ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
-script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
+    ScriptModuleWrapper = torch.jit.ScriptModule if use_jit else nn.Module
+    script_method_wrapper = torch.jit.script_method if use_jit else lambda fn, _rcn=None: fn
+else:
+    ScriptModuleWrapper = nn.Module
+    script_method_wrapper = lambda fn, _rcn=None: fn
 
+def layers_num(x):
+    return x
 
 class Concat(nn.Module):
     def __init__(self, nets, extra_params):
@@ -168,7 +174,7 @@ class PredictionModule(nn.Module):
             # What is this ugly lambda doing in the middle of all this clean prediction module code?
             def make_extra(num_layers):
                 if num_layers == 0:
-                    return lambda x: x
+                    return layers_num
                 else:
                     # Looks more complicated than it is. This just creates an array of num_layers alternating conv-relu
                     return nn.Sequential(*sum([[
