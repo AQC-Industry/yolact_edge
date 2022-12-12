@@ -76,7 +76,7 @@ def parse_args(argv=None):
                         help='The default frame eval stride.')
     parser.add_argument('--output_coco_json', dest='output_coco_json', action='store_true',
                         help='If display is not set, instead of processing IoU values, this just dumps detections into the coco json file.')
-    parser.add_argument('--send_result', dest='send_result', action='store_true',
+    parser.add_argument('--send_result', default=False, dest='send_result', action='store_true',
                         help='If display is not set, instead of processing IoU values, this just prints detections into the console.')
     parser.add_argument('--bbox_det_file', default='results/bbox_detections.json', type=str,
                         help='The output file for coco bbox results if --coco_results is set.')
@@ -303,7 +303,7 @@ class Detections:
         bbox = [round(float(x)*10)/10 for x in bbox]
 
         self.bbox_data.append({
-            'image_id': int(image_id),
+            'image_id': image_id, #int(image_id)
             'category_id': get_coco_cat(int(category_id)),
             'bbox': bbox,
             'score': float(score)
@@ -315,7 +315,7 @@ class Detections:
         rle['counts'] = rle['counts'].decode('ascii') # json.dump doesn't like bytes strings
 
         self.mask_data.append({
-            'image_id': int(image_id),
+            'image_id': image_id, #int(image_id),
             'category_id': get_coco_cat(int(category_id)),
             'segmentation': rle,
             'score': float(score)
@@ -606,7 +606,7 @@ def evalimage(net:Yolact, path:str, save_path:str=None, detections:Detections=No
             _, _, h, w = batch.size()
             classes, scores, boxes, masks = \
                 postprocess(preds, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
-            print(classes, scores, boxes, masks)
+            #print(classes, scores, boxes, masks)
 
         with timer.env('JSON Output'):
             boxes = boxes.cpu().numpy()
@@ -621,7 +621,7 @@ def evalimage(net:Yolact, path:str, save_path:str=None, detections:Detections=No
         _, _, h, w = batch.size()
         classes, scores, boxes, masks = \
                 postprocess(preds, w, h, crop_masks=args.crop, score_threshold=args.score_threshold)
-        print(classes, scores, boxes, masks)
+        #print(classes, scores, boxes, masks)
     
     if save_path is None:
         img_numpy = img_numpy[:, :, (2, 1, 0)]
@@ -649,7 +649,8 @@ def evalimages(net:Yolact, input_folder:str, output_folder:str, detections:Detec
         name = '.'.join(name.split('.')[:-1]) + '.png'
         out_path = os.path.join(output_folder, name)
 
-        time_list.append(evalimage(net, path, out_path, detections=detections, image_id=str(i)))
+        #time_list.append(evalimage(net, path, out_path, detections=detections, image_id=str(i)))
+        time_list.append(evalimage(net, path, out_path, detections=detections, image_id=name))
         print(path + ' -> ' + out_path)
     print("Average time to predict: ", np.mean(time_list))
     print("Average FPS on prediction: ", 1/np.mean(time_list))
