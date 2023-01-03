@@ -346,7 +346,7 @@ class YOLACTEdgeInference(object):
             out = self.prep_output(
                 preds, frame, None, None, undo_transform=False, score_threshold=score_threshold)
         if out == None:
-            print("No predictions!")
+            #print("No predictions!")
             return path, []
 
         img_numpy, classes, scores, masks = out

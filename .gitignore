@@ -161,3 +161,4 @@ data/calib_images
 results
 eval_4k
 eval_dataset
+eval_lectra

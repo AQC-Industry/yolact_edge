@@ -13,6 +13,7 @@ RUN pip install cython opencv-python pillow matplotlib GitPython termcolor tenso
 RUN pip install git+https://github.com/haotian-liu/cocoapi.git#"egg=pycocotools&subdirectory=PythonAPI"
 RUN pip install torch==1.7.1 torchvision==0.8.2 -f https://download.pytorch.org/whl/torch_stable.html
 
+# Copy git repository
 WORKDIR /root/yolact_edge
 
 ENV LANG C.UTF-8
