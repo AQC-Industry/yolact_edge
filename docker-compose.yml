@@ -1,0 +1,15 @@
+version: "3.4"
+
+services:
+  aqc-service-app:
+    build:
+      context: ./
+      dockerfile: ./docker/Dockerfile.cpu
+      target: local
+    image: aqc-service-app
+    container_name: aqc-service-app
+    restart: always
+    volumes:
+        - ./:/root/yolact_edge/
+    ports:
+      - "5432:5432"

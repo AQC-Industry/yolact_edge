@@ -1,4 +1,4 @@
-FROM ubuntu:18.04
+FROM ubuntu:18.04 AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y  \
@@ -13,7 +13,23 @@ RUN pip install cython opencv-python pillow matplotlib GitPython termcolor tenso
 RUN pip install git+https://github.com/haotian-liu/cocoapi.git#"egg=pycocotools&subdirectory=PythonAPI"
 RUN pip install torch==1.7.1 torchvision==0.8.2 -f https://download.pytorch.org/whl/torch_stable.html
 
-# Copy git repository
+FROM base AS local
+
+ENV PRODUCTION=False
+ENV ENV="local"
+
 WORKDIR /root/yolact_edge
 
 ENV LANG C.UTF-8
+
+
+FROM base AS dev
+
+ENV PRODUCTION=False
+ENV ENV=dev
+
+WORKDIR /root/yolact_edge
+
+COPY . .
+
+CMD ["python", "run_inference.py"]
