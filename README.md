@@ -8,7 +8,7 @@ Create a directory called ```./yolact_edge/weights/``` to save the trained weigh
 Ask AQC admins for training weights using Qualitex datasets ```yolact_plus_resnet50_qualitex_custom_2_121_115000.pth```
 
 # Dataset
-Create a directory inside the repository with the images to do the predictions. 
+Create a directory inside the repository with the images to do the predictions.
 
 # Development
 
@@ -21,7 +21,6 @@ docker-compose build
 ```
 3. Run docker image specifing the following volumes:
   - Source Code
-  - Dataset
 ```
 docker run --memory="3g" -it --name=aqc-service-app --shm-size=64gb --env="DISPLAY" --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" -v SOURCE_CODE:/root/yolact_edge/:rw aqc-service-app:latest
 ```
