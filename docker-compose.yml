@@ -5,11 +5,11 @@ services:
     build:
       context: ./
       dockerfile: ./docker/Dockerfile.cpu
-      target: local
+      target: dev
     image: aqc-service-app
     container_name: aqc-service-app
     restart: always
     volumes:
         - ./:/root/yolact_edge/
     ports:
-      - "5432:5432"
+      - "8000:8000"

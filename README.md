@@ -35,3 +35,7 @@ docker-compose build
 ```
 docker run --memory="3g" -it --name=aqc-service-app aqc-service-app:latest
 ```
+4. Stop docker container
+```
+docker rm aqc-service-app
+```
